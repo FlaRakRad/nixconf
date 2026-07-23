@@ -1,3 +1,5 @@
+# /etc/nixos/configuration.nix
+
 { config, pkgs, lib, ... }:
 
 {
@@ -23,10 +25,22 @@
   # =========================================================================
   boot.loader.systemd-boot.enable = true;
   boot.loader.timeout = 0;
-  boot.loader.efi.canTouchEfiVariables = true; # На десктопах UEFI обычно доступно для записи
+  boot.loader.efi.canTouchEfiVariables = false;
 
-  # Актуальное ядро Linux
+  # Ядро посвежее для встроенной графики Intel
   boot.kernelPackages = pkgs.linuxPackages_latest;
+
+  # =========================================================================
+  # POWER MANAGEMENT & THUNDERBOLT MAX POWER (Для постоянной отдачи питания на RPi 5)
+  # =========================================================================
+  # Полностью отключаем усыпление USB/Thunderbolt на уровне ядра Linux
+  boot.kernelParams = [ 
+    "usbcore.autosuspend=-1" 
+    "typec.autosuspend=0"
+  ];
+
+  # Включаем службу управления Thunderbolt, чтобы контроллер всегда был активен
+  services.hardware.bolt.enable = true;
 
   # =========================================================================
   # NIX GARBAGE COLLECTOR
@@ -42,10 +56,16 @@
   # =========================================================================
   # NETWORK, BLUETOOTH, LOCALES, MDNS (AVAHI)
   # =========================================================================
-  networking.hostName = "nixos-desktop";
+  networking.hostName = "nixos";
   networking.networkmanager.enable = true;
 
-  # Включение mDNS (Avahi)
+  # Статический IP для прямого подключения Raspberry Pi по Ethernet (enp0s31f6)
+  networking.interfaces.enp0s31f6.ipv4.addresses = [{
+    address = "10.0.0.1";
+    prefixLength = 24;
+  }];
+
+  # Включение mDNS (Avahi) для поиска устройств .local (Raspberry Pi)
   services.avahi = {
     enable = true;
     nssmdns4 = true;
@@ -55,11 +75,11 @@
     };
   };
 
-  # ФАЕРВОЛ
+  # НАСТРОЙКА ФАЕРВОЛА ДЛЯ ИГРЫ ПО СЕТИ И MDNS
   networking.firewall = {
     enable = true;
-    allowedTCPPorts = [ 25565 ];
-    allowedUDPPorts = [ 25565 44452 5353 ];
+    allowedTCPPorts = [ 25565 ];             # Стандартный порт Minecraft
+    allowedUDPPorts = [ 25565 44452 5353 ];  # Порт майна + LAN + mDNS (5353)
   };
 
   # Bluetooth
@@ -83,28 +103,17 @@
   };
 
   # =========================================================================
-  # HARDWARE (AMD CPU + AMD/NVIDIA GPU)
+  # GRAPHICS (Intel i5-8350U), DISPLAY MANAGER, AND HYPRLAND
   # =========================================================================
-  hardware.cpu.amd.updateMicrocode = true;
-
-  # Графика (OpenGL / Vulkan / VA-API) для AMD и NVIDIA
   hardware.graphics = {
     enable = true;
-    enable32Bit = true;
+    enable32Bit = true; # 32Bit libs
     extraPackages = with pkgs; [
-      vaapiVdpau
+      intel-media-driver
+      intel-vaapi-driver
+      libva-vdpau-driver
       libvdpau-va-gl
     ];
-  };
-
-  # Поддержка NVIDIA (драйвер и гибридные настройки/Wayland)
-  services.xserver.videoDrivers = [ "nvidia" ];
-  hardware.nvidia = {
-    modesetting.enable = true;
-    powerManagement.enable = false; # Для десктопа лучше выключить
-    open = false; # Используем проприетарный драйвер (можно поставить true, если карточка из серии RTX)
-    nvidiaSettings = true;
-    package = config.boot.kernelPackages.nvidiaPackages.stable;
   };
 
   programs.hyprland = {
@@ -118,12 +127,28 @@
     wayland.enable = true;
   };
 
-  # Переменные среды для Wayland / Electron
+  # Var Wayland / Electron
   environment.sessionVariables = {
     NIXOS_OZONE_WL = "1";
-    # Принудительное использование дискретной видеокарты или общие пути для Wine
-    GBM_BACKEND = "nvidia-drm";
-    __GLX_VENDOR_LIBRARY_NAME = "nvidia";
+    # Libs for Wine / Proton
+    LD_LIBRARY_PATH = lib.mkForce (lib.concatStringsSep ":" [
+      "${pkgs.libunwind}/lib"
+      "${pkgs.freetype}/lib"
+      "${pkgs.libglvnd}/lib"
+      "${pkgs.vulkan-loader}/lib"
+      "${pkgs.alsa-lib}/lib"
+      "${pkgs.glib.out}/lib"
+      "${pkgs.libpulseaudio}/lib"
+      "${pkgs.wayland}/lib"
+      "${pkgs.xorg.libX11}/lib"
+      "${pkgs.xorg.libXext}/lib"
+      "${pkgs.libxkbcommon}/lib"
+      "${pkgs.udev}/lib"
+      "${pkgs.gst_all_1.gstreamer}/lib"
+      "${pkgs.gnutls}/lib"
+      "${pkgs.xorg.libXinerama}/lib"
+      "/nix/store/0dzsg0f8id2yki5vqd6zgfrwmb4cf8cd-pipewire-1.4.9-jack/lib"
+    ]);
   };
 
   # =========================================================================
@@ -161,18 +186,27 @@
     description = "tabarejka";
     extraGroups = [ "networkmanager" "wheel" "video" "audio" "input" ];
     packages = with pkgs; [
+      # Internet and social media
       viber
       ayugram-desktop
       vesktop
       qbittorrent
       sioyek
+
+      # Music and multimedia
       spotify
       obs-studio
+
+      # Chemical
       kdePackages.kalzium
       avogadro2
+
+      # Developing
       jetbrains.pycharm-oss
       python3
       jetbrains.jdk
+
+      # Embedded
       kicad
     ];
   };
@@ -192,14 +226,18 @@
     extraCompatPackages = with pkgs; [ proton-ge-bin ];
   };
 
+  # GameMode — turbo-boost
   programs.gamemode.enable = true;
 
   # =========================================================================
   # SYS PKGS
   # =========================================================================
   environment.systemPackages = with pkgs; [
+    # bootloader
     refind
     efibootmgr
+
+    # Var for Hyprland
     kitty
     rofi
     waybar
@@ -209,6 +247,8 @@
     xdg-desktop-portal-hyprland
     hyprland-per-window-layout
     brightnessctl
+
+    # Sys soft, CLI progs
     git
     usbutils
     vim
@@ -220,8 +260,12 @@
     arduino-ide
     rpi-imager
     openssl
+
+    # nvim environment
     nodejs
-    clang-tools     
+    clang-tools    
+
+    # AVR toolchain
     pkgsCross.avr.buildPackages.gcc
     pkgsCross.avr.buildPackages.binutils
     avrdude
@@ -229,22 +273,34 @@
     pkgsCross.avr.buildPackages.gdb
     simavr
     gdb
+
+    # arm toolchain
     gcc-arm-embedded
     picotool
-    minicom     
+    minicom
+    
+    # Screenshots
     grim
     slurp
     swappy
     wl-clipboard
+
+    # Audio control
     pavucontrol
+
+    # Compilers / interpreters
     gcc
     clang
     cargo
     rustc
-    jdk21     
+    jdk21
+    
+    # Package managers
     wget
     curl
     librsvg
+
+    # Альтернативный инструмент для кастомизации и блокировки рекламы в Spotify
     spicetify-cli
   ];
 
@@ -253,7 +309,27 @@
   # =========================================================================
   services.dbus.enable = true;
   services.flatpak.enable = true;
+
+  # ВКЛЮЧАЕМ СЛУЖБУ ZEROTIER
   services.zerotierone.enable = true;
+
+  # Настройка энергосбережения TLP (сохраняем пороги батареи + отключаем засыпание USB)
+  services.tlp = {
+    enable = true;
+    settings = {
+      START_CHARGE_THRESH_BAT0 = 75;
+      START_CHARGE_THRESH_BAT1 = 75;
+
+      STOP_CHARGE_THRESH_BAT0 = 80;
+      STOP_CHARGE_THRESH_BAT1 = 80;
+
+      RESTORE_THRESHOLDS_ON_BAT = 1;
+      NATACPI_ENABLE = 1;
+
+      # Запрещаем TLP выключать питание на USB-портах
+      USB_AUTOSUSPEND = 0;
+    };
+  };
 
   # Version NixOS. DO NOT TOUCH!.
   system.stateVersion = "24.11";
