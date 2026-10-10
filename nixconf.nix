@@ -4,43 +4,107 @@
 
 {
   imports =
-    [ # НЕ УДАЛЯЙТЕ ЭТУ СТРОКУ, она связывает конфиг с твоим железом
+    [ # DO NOT CHANGE
       ./hardware-configuration.nix
     ];
 
   # =========================================================================
-  # ZSHELL
+  # OVERLAYS & WRAPPERS (Fix Viber SSL & Environment)
+  # =========================================================================
+  nixpkgs.config.allowUnfree = true;
+
+  nixpkgs.overlays = [
+    (final: prev: {
+      viber = prev.viber.overrideAttrs (oldAttrs: {
+        nativeBuildInputs = (oldAttrs.nativeBuildInputs or [ ]) ++ [ prev.makeWrapper ];
+        postInstall = (oldAttrs.postInstall or "") + ''
+          wrapProgram $out/bin/viber \
+            --set SSL_CERT_FILE "/etc/ssl/certs/ca-certificates.crt" \
+            --set NIX_SSL_CERT_FILE "/etc/ssl/certs/ca-certificates.crt" \
+            --set SSL_CERT_DIR "/etc/ssl/certs"
+        '';
+      });
+    })
+  ];
+
+  # =========================================================================
+  # ZSHELL & POWERLEVEL10K
   # =========================================================================
   programs.zsh = {
     enable = true;
     enableCompletion = true;
-    promptInit = "";
-
     autosuggestions.enable = true;
     syntaxHighlighting.enable = true;
+
+    # Автоматична ініціалізація Powerlevel10k
+    promptInit = ''
+      source ${pkgs.zsh-powerlevel10k}/share/zsh-powerlevel10k/powerlevel10k.zsh-theme
+      [[ ! -f ~/.p10k.zsh ]] || source ~/.p10k.zsh
+    '';
   };
 
   # =========================================================================
-  # ЗАГРУЗЧИК И СИСТЕМА (rEFInd + скрытый systemd-boot)
+  # FONTS (JetBrains Mono Nerd Font)
+  # =========================================================================
+  fonts.packages = with pkgs; [
+    nerd-fonts.jetbrains-mono
+  ];
+
+  # =========================================================================
+  # KITTY CONFIG 
+  # =========================================================================
+  environment.etc."xdg/kitty/kitty.conf".text = ''
+    font_family      JetBrainsMono Nerd Font Mono
+    bold_font        auto
+    italic_font      auto
+    bold_italic_font auto
+    font_size        12.0
+
+    foreground           #cdd6f4
+    background           #1e1e2e
+    selection_foreground #1e1e2e
+    selection_background #f5e0dc
+
+    cursor               #f5e0dc
+    cursor_shape         block
+    cursor_beam_thickness 1.5
+
+    background_opacity   0.95
+    window_padding_width 10
+    hide_window_decorations no
+
+    tab_bar_style        powerline
+    active_tab_foreground   #11111b
+    active_tab_background   #cba6f7
+
+    map ctrl+equal change_font_size all +2.0
+    map ctrl+minus change_font_size all -2.0
+    map ctrl+t new_tab
+    map ctrl+w close_tab
+  '';
+
+  # =========================================================================
+  # BOOTLOADER & KERNEL
   # =========================================================================
   boot.loader.systemd-boot.enable = true;
   boot.loader.timeout = 0;
   boot.loader.efi.canTouchEfiVariables = false;
 
-  # Ядро посвежее для встроенной графики Intel
   boot.kernelPackages = pkgs.linuxPackages_latest;
 
-  # =========================================================================
-  # POWER MANAGEMENT & THUNDERBOLT MAX POWER (Для постоянной отдачи питания на RPi 5)
-  # =========================================================================
-  # Полностью отключаем усыпление USB/Thunderbolt на уровне ядра Linux
+  # Microcode
+  hardware.cpu.intel.updateMicrocode = true;
+
+  # Power Management & Thunderbolt
   boot.kernelParams = [ 
     "usbcore.autosuspend=-1" 
     "typec.autosuspend=0"
   ];
 
-  # Включаем службу управления Thunderbolt, чтобы контроллер всегда был активен
   services.hardware.bolt.enable = true;
+
+  # Sysctl
+  boot.kernel.sysctl."vm.max_map_count" = 2147483642;
 
   # =========================================================================
   # NIX GARBAGE COLLECTOR
@@ -54,18 +118,18 @@
   nix.settings.auto-optimise-store = true;
 
   # =========================================================================
-  # NETWORK, BLUETOOTH, LOCALES, MDNS (AVAHI)
+  # NETWORK, BLUETOOTH, LOCALES, FIREWALL
   # =========================================================================
   networking.hostName = "nixos";
   networking.networkmanager.enable = true;
 
-  # Статический IP для прямого подключения Raspberry Pi по Ethernet (enp0s31f6)
+  # Статична IP для Raspberry Pi (enp0s31f6)
   networking.interfaces.enp0s31f6.ipv4.addresses = [{
     address = "10.0.0.1";
     prefixLength = 24;
   }];
 
-  # Включение mDNS (Avahi) для поиска устройств .local (Raspberry Pi)
+  # mDNS (Avahi)
   services.avahi = {
     enable = true;
     nssmdns4 = true;
@@ -75,18 +139,18 @@
     };
   };
 
-  # НАСТРОЙКА ФАЕРВОЛА ДЛЯ ИГРЫ ПО СЕТИ И MDNS
+  # Фаєрвол
   networking.firewall = {
     enable = true;
-    allowedTCPPorts = [ 25565 ];             # Стандартный порт Minecraft
-    allowedUDPPorts = [ 25565 44452 5353 ];  # Порт майна + LAN + mDNS (5353)
+    allowedTCPPorts = [ 80 443 25565 4244 5242 5243 7985 5252 ];
+    allowedUDPPorts = [ 25565 44452 5353 4244 5242 5243 7985 5252 ];
   };
 
   # Bluetooth
   hardware.bluetooth.enable = true;
   hardware.bluetooth.powerOnBoot = true;
 
-  # Timezone, locales
+  # Timezone & Locales
   time.timeZone = "Europe/Kyiv";
   i18n.defaultLocale = "en_US.UTF-8";
 
@@ -94,20 +158,21 @@
     "en_US.UTF-8/UTF-8"
     "uk_UA.UTF-8/UTF-8"
     "ru_RU.UTF-8/UTF-8"
+    "it_IT.UTF-8/UTF-8"
   ];
 
-  # Console font
+  # Console (TTY)
   console = {
     font = "Lat2-TermMinus16";
     keyMap = "us";
   };
 
   # =========================================================================
-  # GRAPHICS (Intel i5-8350U), DISPLAY MANAGER, AND HYPRLAND
+  # GRAPHICS, DISPLAY MANAGER, HYPRLAND
   # =========================================================================
   hardware.graphics = {
     enable = true;
-    enable32Bit = true; # 32Bit libs
+    enable32Bit = true;
     extraPackages = with pkgs; [
       intel-media-driver
       intel-vaapi-driver
@@ -121,34 +186,15 @@
     xwayland.enable = true;
   };
 
-  # Display manager
   services.displayManager.sddm = {
     enable = true;
     wayland.enable = true;
   };
 
-  # Var Wayland / Electron
   environment.sessionVariables = {
     NIXOS_OZONE_WL = "1";
-    # Libs for Wine / Proton
-    LD_LIBRARY_PATH = lib.mkForce (lib.concatStringsSep ":" [
-      "${pkgs.libunwind}/lib"
-      "${pkgs.freetype}/lib"
-      "${pkgs.libglvnd}/lib"
-      "${pkgs.vulkan-loader}/lib"
-      "${pkgs.alsa-lib}/lib"
-      "${pkgs.glib.out}/lib"
-      "${pkgs.libpulseaudio}/lib"
-      "${pkgs.wayland}/lib"
-      "${pkgs.xorg.libX11}/lib"
-      "${pkgs.xorg.libXext}/lib"
-      "${pkgs.libxkbcommon}/lib"
-      "${pkgs.udev}/lib"
-      "${pkgs.gst_all_1.gstreamer}/lib"
-      "${pkgs.gnutls}/lib"
-      "${pkgs.xorg.libXinerama}/lib"
-      "/nix/store/0dzsg0f8id2yki5vqd6zgfrwmb4cf8cd-pipewire-1.4.9-jack/lib"
-    ]);
+    VULKAN_SDK = "${pkgs.vulkan-headers}";
+    VK_LAYER_PATH = "${pkgs.vulkan-validation-layers}/share/vulkan/explicit_layer.d";
   };
 
   # =========================================================================
@@ -178,159 +224,45 @@
   };
 
   # =========================================================================
-  # USERS tabarejka
+  # USERS
   # =========================================================================
   users.users.tabarejka = {
     isNormalUser = true;
     shell = pkgs.zsh;
     description = "tabarejka";
-    extraGroups = [ "networkmanager" "wheel" "video" "audio" "input" ];
+    extraGroups = [ "networkmanager" "wheel" "video" "audio" "input" "libvirtd" "kvm" ];
     packages = with pkgs; [
-      # Internet and social media
       viber
       ayugram-desktop
       vesktop
       qbittorrent
       sioyek
-
-      # Music and multimedia
       spotify
       obs-studio
-
-      # Chemical
       kdePackages.kalzium
       avogadro2
-
-      # Developing
       jetbrains.pycharm-oss
       python3
       jetbrains.jdk
-
-      # Embedded
       kicad
+      freecad
     ];
   };
 
   # =========================================================================
-  # REPO SETTINGS
-  # =========================================================================
-  nixpkgs.config.allowUnfree = true;
-
-  # =========================================================================
-  # GAYMING
+  # GAMING
   # =========================================================================
   programs.steam = {
     enable = true;
     remotePlay.openFirewall = true;
     dedicatedServer.openFirewall = true;
     extraCompatPackages = with pkgs; [ proton-ge-bin ];
+    gamescopeSession.enable = true;
   };
 
-  # GameMode — turbo-boost
   programs.gamemode.enable = true;
 
   # =========================================================================
-  # SYS PKGS
+  # SYSTEM PACKAGES
   # =========================================================================
-  environment.systemPackages = with pkgs; [
-    # bootloader
-    refind
-    efibootmgr
-
-    # Var for Hyprland
-    kitty
-    rofi
-    waybar
-    firefox
-    dunst
-    swww
-    xdg-desktop-portal-hyprland
-    hyprland-per-window-layout
-    brightnessctl
-
-    # Sys soft, CLI progs
-    git
-    usbutils
-    vim
-    neovim
-    fastfetch
-    btop
-    sqlite
-    gnumake
-    arduino-ide
-    rpi-imager
-    openssl
-
-    # nvim environment
-    nodejs
-    clang-tools    
-
-    # AVR toolchain
-    pkgsCross.avr.buildPackages.gcc
-    pkgsCross.avr.buildPackages.binutils
-    avrdude
-    openocd
-    pkgsCross.avr.buildPackages.gdb
-    simavr
-    gdb
-
-    # arm toolchain
-    gcc-arm-embedded
-    picotool
-    minicom
-    
-    # Screenshots
-    grim
-    slurp
-    swappy
-    wl-clipboard
-
-    # Audio control
-    pavucontrol
-
-    # Compilers / interpreters
-    gcc
-    clang
-    cargo
-    rustc
-    jdk21
-    
-    # Package managers
-    wget
-    curl
-    librsvg
-
-    # Альтернативный инструмент для кастомизации и блокировки рекламы в Spotify
-    spicetify-cli
-  ];
-
-  # =========================================================================
-  # SYS DAEMONS AND SYS VERSION
-  # =========================================================================
-  services.dbus.enable = true;
-  services.flatpak.enable = true;
-
-  # ВКЛЮЧАЕМ СЛУЖБУ ZEROTIER
-  services.zerotierone.enable = true;
-
-  # Настройка энергосбережения TLP (сохраняем пороги батареи + отключаем засыпание USB)
-  services.tlp = {
-    enable = true;
-    settings = {
-      START_CHARGE_THRESH_BAT0 = 75;
-      START_CHARGE_THRESH_BAT1 = 75;
-
-      STOP_CHARGE_THRESH_BAT0 = 80;
-      STOP_CHARGE_THRESH_BAT1 = 80;
-
-      RESTORE_THRESHOLDS_ON_BAT = 1;
-      NATACPI_ENABLE = 1;
-
-      # Запрещаем TLP выключать питание на USB-портах
-      USB_AUTOSUSPEND = 0;
-    };
-  };
-
-  # Version NixOS. DO NOT TOUCH!.
-  system.stateVersion = "24.11";
-}
+  envir
